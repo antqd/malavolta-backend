@@ -1,7 +1,7 @@
 // src/routes/auth.js
 import { Router } from "express";
 import { pool } from "../db.js";
-import bcrypt from "bcrypt";
+import bcrypt from "bcrypt";           // <-- se usi bcryptjs:  import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "../middleware/requireAuth.js";
 
@@ -35,7 +35,10 @@ router.post("/register", async (req, res) => {
     }
 
     // email unica
-    const [exists] = await pool.query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
+    const [exists] = await pool.query(
+      "SELECT id FROM users WHERE email = ? LIMIT 1",
+      [email]
+    );
     if (exists.length) return res.status(409).json({ error: "Email già registrata" });
 
     const hash = await bcrypt.hash(password, 12);
@@ -63,7 +66,10 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "email e password obbligatorie" });
     }
 
-    const [rows] = await pool.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
+    const [rows] = await pool.query(
+      "SELECT id, name, email, role, password_hash FROM users WHERE email = ? LIMIT 1",
+      [email]
+    );
     const user = rows[0];
     if (!user) return res.status(401).json({ error: "Credenziali non valide" });
 
@@ -82,9 +88,10 @@ router.post("/login", async (req, res) => {
 /** GET /api/auth/me (protetta) */
 router.get("/me", requireAuth, async (req, res) => {
   // req.user arriva dal middleware (payload del JWT)
-  const [rows] = await pool.query("SELECT id, name, email, role FROM users WHERE id = ? LIMIT 1", [
-    req.user.id,
-  ]);
+  const [rows] = await pool.query(
+    "SELECT id, name, email, role FROM users WHERE id = ? LIMIT 1",
+    [req.user.id]
+  );
   const me = rows[0];
   return res.json({ ok: true, user: me });
 });
