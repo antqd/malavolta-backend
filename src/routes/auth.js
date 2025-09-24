@@ -1,104 +1,138 @@
-// src/routes/auth.js
+// src/routes/auth.js (ESM) — login/register senza ruoli + cookie cross-site “hard”
 import { Router } from "express";
-import { pool } from "../db.js";
-import bcrypt from "bcrypt";           // <-- se usi bcryptjs:  import bcrypt from "bcryptjs";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { requireAuth } from "../middleware/requireAuth.js";
+import { pool } from "../db.js";
 
 const router = Router();
 
-const TOKEN_NAME = "token";
-const COOKIE_OPTS = {
-  httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 giorni
-};
+const TOKEN_NAME = "auth_token";
+const JWT_SECRET = process.env.JWT_SECRET || "cambia-questo-subito";
+const MAX_AGE = 60 * 60 * 24 * 7; // 7 giorni
+
+function signJwt(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: MAX_AGE });
+}
+function verifyJwt(token) {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+const IS_PROD = String(process.env.NODE_ENV).toLowerCase() === "production";
+const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || undefined; // .alfonsomalavolta.com in prod
+
+function cookieForProd() {
+  return {
+    httpOnly: true,
+    sameSite: "none", // cross-site OK
+    secure: true, // richiesto se SameSite=None
+    domain: COOKIE_DOMAIN, // .alfonsomalavolta.com
+    path: "/",
+    maxAge: MAX_AGE * 1000,
+  };
+}
+function cookieForDev() {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: false,
+    path: "/",
+    maxAge: MAX_AGE * 1000,
+  };
+}
+const buildCookieOpts = () => (IS_PROD ? cookieForProd() : cookieForDev());
+
+// --- PING
+router.get("/__ping", (_req, res) => res.json({ ok: true, scope: "auth" }));
 
 // Helpers
-function signToken(payload) {
-  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "7d" });
+async function getUserByEmail(email) {
+  const [rows] = await pool.execute(
+    `SELECT id, name, email, password_hash AS passwordHash, created_at AS createdAt
+     FROM users WHERE email = ? LIMIT 1`,
+    [email]
+  );
+  return rows[0] || null;
 }
-function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, role: u.role };
+async function getUserById(id) {
+  const [rows] = await pool.execute(
+    `SELECT id, name, email, created_at AS createdAt FROM users WHERE id = ? LIMIT 1`,
+    [id]
+  );
+  return rows[0] || null;
 }
 
-/** POST /api/auth/register */
+// REGISTER
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password } = req.body ?? {};
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: "name, email e password sono obbligatori" });
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ error: "La password deve avere almeno 8 caratteri" });
-    }
+    const { name, email, password } = req.body || {};
+    if (!name || name.trim().length < 2)
+      return res.status(400).json({ error: "Nome non valido" });
+    if (!email || !/^\S+@\S+\.\S+$/.test(email))
+      return res.status(400).json({ error: "Email non valida" });
+    if (!password || password.length < 8)
+      return res.status(400).json({ error: "Password troppo corta (min 8)" });
 
-    // email unica
-    const [exists] = await pool.query(
-      "SELECT id FROM users WHERE email = ? LIMIT 1",
-      [email]
+    const exists = await getUserByEmail(email.toLowerCase());
+    if (exists) return res.status(409).json({ error: "Email già registrata" });
+
+    const hash = await bcrypt.hash(password, 10);
+    const [result] = await pool.execute(
+      "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
+      [name.trim(), email.toLowerCase(), hash]
     );
-    if (exists.length) return res.status(409).json({ error: "Email già registrata" });
+    const user = await getUserById(result.insertId);
 
-    const hash = await bcrypt.hash(password, 12);
-    const [result] = await pool.query(
-      "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'user')",
-      [name, email, hash]
-    );
-
-    const user = { id: result.insertId, name, email, role: "user" };
-    const token = signToken({ id: user.id, email: user.email, role: user.role });
-
-    res.cookie(TOKEN_NAME, token, COOKIE_OPTS);
-    return res.status(201).json({ ok: true, user });
+    const token = signJwt({ uid: user.id, email: user.email });
+    res.cookie(TOKEN_NAME, token, buildCookieOpts());
+    return res.status(201).json({ user });
   } catch (err) {
-    console.error("REGISTER ERROR", err);
+    console.error("register error", err);
     return res.status(500).json({ error: "Errore server" });
   }
 });
 
-/** POST /api/auth/login */
+// LOGIN
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body ?? {};
-    if (!email || !password) {
-      return res.status(400).json({ error: "email e password obbligatorie" });
-    }
+    const { email, password } = req.body || {};
+    if (!email || !password)
+      return res.status(400).json({ error: "Credenziali mancanti" });
 
-    const [rows] = await pool.query(
-      "SELECT id, name, email, role, password_hash FROM users WHERE email = ? LIMIT 1",
-      [email]
-    );
-    const user = rows[0];
-    if (!user) return res.status(401).json({ error: "Credenziali non valide" });
+    const user = await getUserByEmail(email.toLowerCase());
+    if (!user)
+      return res.status(401).json({ error: "Email o password errati" });
 
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: "Credenziali non valide" });
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: "Email o password errati" });
 
-    const token = signToken({ id: user.id, email: user.email, role: user.role });
-    res.cookie(TOKEN_NAME, token, COOKIE_OPTS);
-    return res.json({ ok: true, user: publicUser(user) });
+    const token = signJwt({ uid: user.id, email: user.email });
+    res.cookie(TOKEN_NAME, token, buildCookieOpts());
+    return res.json({
+      user: { id: user.id, name: user.name, email: user.email },
+    });
   } catch (err) {
-    console.error("LOGIN ERROR", err);
+    console.error("login error", err);
     return res.status(500).json({ error: "Errore server" });
   }
 });
 
-/** GET /api/auth/me (protetta) */
-router.get("/me", requireAuth, async (req, res) => {
-  // req.user arriva dal middleware (payload del JWT)
-  const [rows] = await pool.query(
-    "SELECT id, name, email, role FROM users WHERE id = ? LIMIT 1",
-    [req.user.id]
-  );
-  const me = rows[0];
-  return res.json({ ok: true, user: me });
+// ME
+router.get("/me", async (req, res) => {
+  const token = req.cookies?.[TOKEN_NAME];
+  const payload = token ? verifyJwt(token) : null;
+  if (!payload) return res.status(401).json({ error: "Non autenticato" });
+  const user = await getUserById(payload.uid);
+  if (!user) return res.status(401).json({ error: "Sessione non valida" });
+  return res.json({ user });
 });
 
-/** POST /api/auth/logout */
-router.post("/logout", (_req, res) => {
-  res.clearCookie(TOKEN_NAME);
+// LOGOUT
+router.post("/logout", (req, res) => {
+  res.clearCookie(TOKEN_NAME, { ...buildCookieOpts(), maxAge: 0 });
   return res.json({ ok: true });
 });
 
