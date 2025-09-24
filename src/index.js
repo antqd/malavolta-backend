@@ -7,7 +7,9 @@ import path from "path";
 import multer from "multer";
 
 import trattoriRoutes from "./routes/trattori.js";
-import authRoutes from "./routes/auth.js"; // <— ATTIVO
+import authRoutes from "./routes/auth.js"; 
+import usersRoutes from "./routes/users.js";   // 👈 aggiunto
+import auditRoutes from "./routes/audit.js";   // 👈 aggiunto
 
 dotenv.config();
 
@@ -30,7 +32,6 @@ const ENV_ORIGINS = (process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 const ALLOWED_ORIGINS = [...new Set([...STATIC_ORIGINS, ...ENV_ORIGINS])];
 import { pool } from "./db.js";
-
 
 app.use(
   cors({
@@ -59,7 +60,9 @@ app.get("/api/health/db", async (_req, res) => {
     res.json({ ok: true, db: rows[0]?.ok });
   } catch (err) {
     console.error("DB Health error:", err);
-    res.status(500).json({ ok: false, code: err.code, message: err.message });
+    res
+      .status(500)
+      .json({ ok: false, code: err.code, message: err.message });
   }
 });
 
@@ -68,8 +71,10 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, db: "up" }));
 app.get("/api/test", (_req, res) => res.json({ ok: true, db: "up" }));
 
 // ---------- ROUTES ----------
-app.use("/api/auth", authRoutes); // <— /api/auth/*
+app.use("/api/auth", authRoutes);
 app.use("/api/trattori", trattoriRoutes);
+app.use("/api/users", usersRoutes);   // 👈 nuova route
+app.use("/api/audit", auditRoutes);   // 👈 nuova route
 
 // ---------- UPLOAD ----------
 const storage = multer.diskStorage({
