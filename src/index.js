@@ -8,8 +8,9 @@ import multer from "multer";
 
 import trattoriRoutes from "./routes/trattori.js";
 import authRoutes from "./routes/auth.js"; 
-import usersRoutes from "./routes/users.js";   // 👈 aggiunto
-import auditRoutes from "./routes/audit.js";   // 👈 aggiunto
+import usersRoutes from "./routes/users.js";   
+import auditRoutes from "./routes/audit.js";   
+import adminsRoutes from "./routes/admins.js";   // 👈 aggiunto
 
 dotenv.config();
 
@@ -73,8 +74,9 @@ app.get("/api/test", (_req, res) => res.json({ ok: true, db: "up" }));
 // ---------- ROUTES ----------
 app.use("/api/auth", authRoutes);
 app.use("/api/trattori", trattoriRoutes);
-app.use("/api/users", usersRoutes);   // 👈 nuova route
-app.use("/api/audit", auditRoutes);   // 👈 nuova route
+app.use("/api/users", usersRoutes);   
+app.use("/api/audit", auditRoutes);   
+app.use("/api/admins", adminsRoutes);   // 👈 nuova route admins
 
 // ---------- UPLOAD ----------
 const storage = multer.diskStorage({
